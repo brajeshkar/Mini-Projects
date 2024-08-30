@@ -1,0 +1,238 @@
+// assignment3.cpp : Defines the entry point for the console application.
+//
+
+#include "stdafx.h"
+#include "process.h"
+#include "conio.h"
+#include "math.h"
+
+#define inputfile "test.txt"		//put filename containg data 
+#define noisefile "Noise.txt"       //put the filename containing ambient noise data
+#define N 320						//put framesize to be considered
+#define p 12
+#define pi 3.1415926535
+
+
+FILE* OpenFile(char fname[], char mode[])
+{
+	int err;
+	FILE *f1 = NULL;
+	err = fopen_s(&f1, fname ,mode);
+	if(err != NULL)
+    {
+        printf("\nCannot open the file\n");
+        system("pause");
+        exit(1);
+    }  
+	printf("file opened");
+	return f1;
+}
+
+
+long double GetData(char ch)
+{
+	char fname[] = noisefile;						
+	int x,i=0;
+	long double DCShift = 0;
+	long double max=0;
+	FILE * f1 = OpenFile(fname,"r");				//Open and read file "Noise.txt"
+	switch(ch)
+	{
+	case 'D': //calculate DCShift
+				
+			 while(!feof(f1))
+				if( fscanf_s( f1, "%d", &x) == 1)
+					{ 
+						DCShift += x;	
+						i++;
+					}
+			
+			DCShift /= i;
+	 	 	return DCShift; 
+
+	case 'A': //calculate Ambient noise
+			while(!feof(f1))
+				if( fscanf_s( f1, "%d", &x) == 1)
+					{ 
+						if(abs(x)>max)
+							max = abs(x);
+					}
+			return max;
+	}
+}
+
+long double NormFactor()
+{
+	char fname[] = inputfile;						
+	int err,x;
+	long double max = 0,min = 0,limit = 5000, scale;
+	FILE * f1 = OpenFile(fname,"r");				//Open and read the file 
+	while(!feof(f1))								//Find the min and max values
+			{
+					if( fscanf_s( f1, "%d", &x) == 1)
+					{ 
+						if(x>max)
+							max = x;
+						if(x<min)
+							min = x;
+					}
+			}
+	scale = (max - min) / 2;
+	return (limit/scale);
+
+}
+
+void HammingWindow(long double s[])      //cap the frame with hamming window
+{
+	long double w[N];
+	for(int m=0; m<=N-1; m++){
+		w[m] = 0.54 - 0.46 * cos((double)(2*22*m)/(7*(N-1))) ;
+		//printf("%Lf\n",w[m]);
+	}
+
+	for(int i = 1; i<=N; i++)
+		s[i] *= w[i-1];
+	
+}
+
+void Calc_Ri(long double s[],long double R[])		///returns Ri s of the given frame
+{
+	
+	for(int k = 0; k<=p; k++)
+	{
+		long double temp = 0;
+		for(int y = 1; y<= N-k; y++)
+		{
+			temp += s[y]*s[y+k];
+		}
+		R[k] = temp;
+	}
+	
+}
+
+void Calc_ai(long double s[], long double R[], long double a[])  // impl Levinsion Alg
+{
+	long double E[p+1],K[p+1];
+	long double A[p+1][p+1];
+	E[0] = R[0];
+	for(int i=1; i<=p; i++)
+	{
+		long double temp = 0;
+		for(int j = 1; j<= i-1; j++)
+			temp += A[j][i-1] * R[i-j];
+		K[i] = (R[i] - temp) / E[i-1];
+		A[i][i] = K[i];
+		for(int j = 1; j<= i-1; j++)
+			A[j][i] = A[j][i-1] - K[i] * A[i-j][i-1];
+		E[i] = (1 - K[i]*K[i]) * E[i-1];
+	}
+	for(int i = 1; i<=p; i++)
+	{
+		a[i] = A[i][p];
+	}
+	
+
+}
+void Calc_ci(long double a[], long double R[], long double c[])  //compute cepstral coeff
+{
+	long double energy = R[0];
+	c[0] = log(energy*energy);
+	for(int m = 1; m<=p; m++)
+	{
+		long double temp = 0;
+		for(int k = 1; k<=m-1;k++)
+			temp+= ((double)k/m) * c[k] * a[m-k];
+		c[m] = a[m] +temp;
+	}
+	
+}
+
+void Calc_ci_RSW(long double a[], long double R[],long double RSW_c[])  //compute cepstral coeff with raised sine window
+{
+	long double energy = R[0],Cweight[p];
+	RSW_c[0] = log(energy*energy);
+	for(int m = 1; m<=p; m++)
+	{
+		long double temp = 0;
+		for(int k = 1; k<=m-1;k++)
+			temp+= ((double)k/m) * RSW_c[k] * a[m-k];
+		RSW_c[m] = a[m] + temp;
+	}
+	for(int m = 0; m<p; m++)
+		Cweight[m] = 1 + (p/2)*sin((double)(22*m)/(7*p));
+
+	for(int i = 1; i<=p; i++)
+		RSW_c[i] *= Cweight[i-1];
+}
+
+long double Calc_DistT(long double c[], long double cr[])  //returns tokhura distance
+{
+	long double d=0;
+	long double TW[13] = {0,1.0,3.0,7.0,13.0,19.0,22.0,25.0,33.0,42.0,50.0,56.0,61.0};
+	for(int i = 1; i<=p; i++)
+		d+= TW[i] * ((c[i] - cr[i])*(c[i] - cr[i]));
+
+	return d;
+}
+
+void fetch_frame(long double s[]){
+	int i = 1;
+	FILE *filePointer;
+    long double value;
+
+    filePointer = fopen("test.txt", "r");
+    if (filePointer == NULL) {
+        printf("File could not be opened.\n");
+        return;  
+    }
+
+    while (fscanf(filePointer, "%Lf", &value) != EOF) {
+        s[i++] = value;
+		/*if(i==320){
+		    calculate();
+			clean s[];
+			i=0;
+		}*/
+    }
+
+    fclose(filePointer);
+}
+
+
+int _tmain(int argc, _TCHAR* argv[])
+{
+//	long double DCShift = GetData('D');
+//	long double Ambient = GetData('A');
+//	long double Normalize = NormFactor();
+//	Ambient *= Normalize; //Normalize ambient energy
+//	printf("DCShift : %lf \nAmbient Noise : %lf \nNormalization Factor : %lf\n",DCShift,Ambient,Normalize);
+
+///A3
+	long double s[321];
+	long double R[p+1],a[p+1],c[p+1],RSW_c[p+1];
+	fetch_frame(s);
+	HammingWindow(s);
+	Calc_Ri(s,R);
+	Calc_ai(s,R,a);
+	Calc_ci(a,R,c);
+	Calc_ci_RSW(a, R,RSW_c);
+	/*for(int i = 0; i<=p; i++)
+		printf("%Lf\n",R[i]);*/
+
+	/*for(int i = 1; i<=p; i++)
+		printf("%Lf\n",a[i]);*/
+
+	/*for(int i = 0; i<=p; i++)
+		printf("%Lf\n",c[i]);*/
+	
+
+	  for(int i = 0; i<=p; i++)
+		printf("%Lf\n",RSW_c[i]);
+
+	getch();
+	return 0;
+}
+
+
+
+
